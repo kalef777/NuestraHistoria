@@ -1,0 +1,4 @@
+Copia en esta carpeta tus fotos y videos.
+
+Después vuelve a la carpeta principal y ejecuta:
+generar-lista.bat
