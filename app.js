@@ -2,7 +2,8 @@
   "use strict";
 
   const config = window.ALBUM_CONFIG || {};
-  const allItems = Array.isArray(window.MEDIA_LIST) ? window.MEDIA_LIST : [];
+  const localItems = Array.isArray(window.MEDIA_LIST) ? window.MEDIA_LIST : [];
+  let allItems = [];
 
   const els = {
     body: document.body,
@@ -36,16 +37,13 @@
     shareButton: document.querySelector("#shareButton"),
     musicButton: document.querySelector("#musicButton"),
     musicLabel: document.querySelector("#musicLabel"),
-    musicDock: document.querySelector("#musicDock"),
-    musicTitle: document.querySelector("#musicTitle"),
-    dockMusicButton: document.querySelector("#dockMusicButton"),
-    youtubeMusicMount: document.querySelector("#youtubeMusicMount"),
+    backgroundMusic: document.querySelector("#backgroundMusic"),
     surpriseMessage: document.querySelector("#surpriseMessage"),
     surpriseText: document.querySelector("#surpriseText"),
     viewer: document.querySelector("#viewer"),
-    viewerEffects: document.querySelector("#viewerEffects"),
     viewerImage: document.querySelector("#viewerImage"),
     viewerVideo: document.querySelector("#viewerVideo"),
+    viewerFrame: document.querySelector("#viewerFrame"),
     viewerTitle: document.querySelector("#viewerTitle"),
     viewerPosition: document.querySelector("#viewerPosition"),
     closeViewer: document.querySelector("#closeViewer"),
@@ -59,7 +57,6 @@
       ? config.messages
       : ["Contigo, cualquier momento se vuelve especial."];
 
-  let currentFilter = "all";
   let visibleCount = Number(config.itemsPerPage) || 60;
   let activeIndex = 0;
   let filteredItems = [];
@@ -71,22 +68,33 @@
   let touchStartX = 0;
   let musicStarted = false;
   let musicPlaying = false;
-  let youtubeFrame = null;
+  let audioLoadFailed = false;
 
   init();
 
-  function init() {
+  async function init() {
     applyConfig();
     setupWelcome();
-    setupSlideshow();
     bindEvents();
-    applyFilter("all");
-    animateCount();
     startMessageRotation();
 
     if (config.floatingHearts !== false) {
       startAmbientHearts();
     }
+
+    setLoadingState();
+
+    try {
+      allItems = await loadItems();
+    } catch (error) {
+      console.error(error);
+      showLoadError(error.message || "No se pudo conectar con Google Drive.");
+      return;
+    }
+
+    setupSlideshow();
+    applyFilter("all");
+    animateCount();
   }
 
   function applyConfig() {
@@ -101,30 +109,112 @@
     els.footerTitle.textContent = title;
     els.welcomeTitle.textContent = title;
     els.pageSubtitle.textContent = subtitle;
+    els.welcomeText.textContent = config.welcomeText || "";
+    els.letterTitle.textContent = config.letterTitle || "";
+    els.letterText.textContent = config.letterText || "";
+    els.signatureText.textContent = config.signature || "Siempre tú y yo ♥";
+    els.closingTitle.textContent = config.closingTitle || "";
+    els.closingText.textContent = config.closingText || "";
+  }
 
-    els.welcomeText.textContent =
-      config.welcomeText ||
-      "Hice este lugar para guardar todo lo bonito que hemos vivido.";
+  async function loadItems() {
+    const apiKey = String(config.googleDriveApiKey || "").trim();
+    const folderId = String(config.driveFolderId || "").trim();
 
-    els.letterTitle.textContent =
-      config.letterTitle || "Gracias por ser parte de mi vida";
+    if (!apiKey || apiKey.includes("PEGA_AQUI")) {
+      if (localItems.length) return localItems;
+      throw new Error("Falta pegar la nueva clave de Google Drive API en config.js.");
+    }
 
-    els.letterText.textContent =
-      config.letterText ||
-      "Esta página no es solo un álbum. Es un rincón para volver a nosotros.";
+    if (!folderId) {
+      throw new Error("Falta el ID de la carpeta de Google Drive.");
+    }
 
-    els.signatureText.textContent =
-      config.signature || "Siempre tú y yo ♥";
+    const files = [];
+    let pageToken = "";
 
-    els.closingTitle.textContent =
-      config.closingTitle ||
-      "Todavía nos quedan muchas historias por vivir";
+    do {
+      const params = new URLSearchParams({
+        q: `'${folderId}' in parents and trashed = false`,
+        fields:
+          "nextPageToken,files(id,name,mimeType,thumbnailLink,webViewLink,webContentLink,createdTime,size)",
+        pageSize: "1000",
+        orderBy: "name_natural",
+        key: apiKey
+      });
 
-    els.closingText.textContent =
-      config.closingText ||
-      "Que este álbum siga creciendo con cada abrazo y cada aventura.";
+      if (pageToken) params.set("pageToken", pageToken);
 
-    els.musicTitle.textContent = config.musicTitle || "Nuestra canción";
+      const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files?${params.toString()}`
+      );
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        const detail =
+          payload?.error?.message ||
+          "Google Drive rechazó la solicitud. Revisa la clave y los permisos.";
+        throw new Error(detail);
+      }
+
+      files.push(...(payload.files || []));
+      pageToken = payload.nextPageToken || "";
+    } while (pageToken);
+
+    return files
+      .filter((file) =>
+        String(file.mimeType || "").startsWith("image/") ||
+        String(file.mimeType || "").startsWith("video/")
+      )
+      .map((file) => {
+        const isVideo = String(file.mimeType).startsWith("video/");
+        const thumbnail =
+          file.thumbnailLink ||
+          `https://drive.google.com/thumbnail?id=${encodeURIComponent(file.id)}&sz=w1600`;
+
+        return {
+          id: file.id,
+          name: cleanFilename(file.name),
+          originalName: file.name,
+          mimeType: file.mimeType,
+          type: isVideo ? "video" : "image",
+          thumbnailUrl: thumbnail.replace(/=s\d+$/, "=s1600"),
+          imageUrl:
+            `https://drive.google.com/thumbnail?id=${encodeURIComponent(file.id)}&sz=w2400`,
+          previewUrl:
+            `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/preview`,
+          createdTime: file.createdTime || "",
+          size: Number(file.size || 0)
+        };
+      });
+  }
+
+  function cleanFilename(name) {
+    return String(name || "Recuerdo")
+      .replace(/\.(jpe?g|png|gif|webp|bmp|avif|heic|heif|mp4|mov|m4v|webm|avi)$/i, "")
+      .replace(/[_-]+/g, " ")
+      .trim();
+  }
+
+  function setLoadingState() {
+    els.totalCount.textContent = "…";
+    els.gallery.replaceChildren();
+    els.emptyState.hidden = false;
+    const title = els.emptyState.querySelector("h3");
+    const text = els.emptyState.querySelector("p");
+    if (title) title.textContent = "Cargando nuestros recuerdos…";
+    if (text) text.textContent = "La primera carga puede tardar unos segundos.";
+  }
+
+  function showLoadError(message) {
+    els.totalCount.textContent = "0";
+    els.gallery.replaceChildren();
+    els.emptyState.hidden = false;
+    const title = els.emptyState.querySelector("h3");
+    const text = els.emptyState.querySelector("p");
+    if (title) title.textContent = "No pudimos cargar el álbum";
+    if (text) text.textContent = message;
   }
 
   function setupWelcome() {
@@ -166,8 +256,7 @@
     const images = allItems.filter((item) => item.type === "image").slice(0, 8);
     if (!images.length) return;
 
-    const firstPath = safePath(images[0].path);
-    els.heroPhotoA.src = firstPath;
+    els.heroPhotoA.src = getCardImage(images[0]);
     els.heroPhotoA.classList.add("active");
 
     if (images.length === 1) return;
@@ -176,7 +265,7 @@
 
     window.setInterval(() => {
       slideshowIndex = (slideshowIndex + 1) % images.length;
-      const nextSrc = safePath(images[slideshowIndex].path);
+      const nextSrc = getCardImage(images[slideshowIndex]);
 
       if (activeHeroLayer === "a") {
         els.heroPhotoB.src = nextSrc;
@@ -207,11 +296,9 @@
       showRandomSurprise();
       createHeartRain(35);
     });
-
     els.heartRainButton.addEventListener("click", () => createHeartRain(28));
     els.shareButton.addEventListener("click", sharePage);
     els.musicButton.addEventListener("click", toggleMusic);
-    els.dockMusicButton.addEventListener("click", toggleMusic);
 
     els.closeViewer.addEventListener("click", closeViewer);
     els.previousItem.addEventListener("click", () => moveViewer(-1));
@@ -248,14 +335,12 @@
     });
 
     window.addEventListener("scroll", updateScrollProgress, { passive: true });
-
     document.addEventListener("dblclick", (event) => {
       createBurst(event.clientX, event.clientY, 12);
     });
   }
 
   function applyFilter(filter) {
-    currentFilter = filter;
     visibleCount = Number(config.itemsPerPage) || 60;
 
     els.filters.forEach((button) => {
@@ -276,15 +361,17 @@
     if (filteredItems.length === 0) {
       els.emptyState.hidden = false;
       els.loadMore.hidden = true;
+      const title = els.emptyState.querySelector("h3");
+      const text = els.emptyState.querySelector("p");
+      if (title) title.textContent = "No encontramos fotos ni videos";
+      if (text) text.textContent = "Verifica que los archivos estén dentro de la carpeta pública.";
       return;
     }
 
     els.emptyState.hidden = true;
 
     const fragment = document.createDocumentFragment();
-    const itemsToRender = filteredItems.slice(0, visibleCount);
-
-    itemsToRender.forEach((item, index) => {
+    filteredItems.slice(0, visibleCount).forEach((item, index) => {
       fragment.appendChild(createCard(item, index));
     });
 
@@ -300,23 +387,24 @@
     card.setAttribute("aria-label", `Abrir ${item.name}`);
     card.addEventListener("click", () => openViewer(index));
 
-    const src = safePath(item.path);
+    const image = document.createElement("img");
+    image.src = getCardImage(item);
+    image.alt = item.name;
+    image.loading = "lazy";
+    image.decoding = "async";
 
-    if (item.type === "image") {
-      const image = document.createElement("img");
-      image.src = src;
-      image.alt = item.name;
-      image.loading = "lazy";
-      image.decoding = "async";
-      card.appendChild(image);
-    } else {
-      const video = document.createElement("video");
-      video.src = src;
-      video.preload = "metadata";
-      video.muted = true;
-      video.playsInline = true;
-      card.appendChild(video);
+    image.addEventListener("error", () => {
+      const fallback = document.createElement("div");
+      fallback.className = "card-media-fallback";
+      fallback.innerHTML =
+        `<div><span>${item.type === "video" ? "▶" : "♡"}</span>` +
+        `No se pudo generar la vista previa</div>`;
+      image.replaceWith(fallback);
+    }, { once: true });
 
+    card.appendChild(image);
+
+    if (item.type === "video") {
       const badge = document.createElement("span");
       badge.className = "video-badge";
       badge.textContent = "▶";
@@ -327,7 +415,6 @@
     heart.className = "card-heart";
     heart.textContent = "♡";
     heart.title = "Me encanta";
-
     heart.addEventListener("click", (event) => {
       event.stopPropagation();
       heart.classList.toggle("loved");
@@ -337,22 +424,22 @@
 
     const info = document.createElement("span");
     info.className = "card-info";
-
     const title = document.createElement("strong");
     title.textContent = item.name;
-
     const type = document.createElement("span");
     type.textContent = item.type === "image" ? "FOTO" : "VIDEO";
-
     info.append(title, type);
     card.append(heart, info);
 
     return card;
   }
 
+  function getCardImage(item) {
+    return item.thumbnailUrl || item.imageUrl || safePath(item.path || "");
+  }
+
   function setupRevealObserver() {
     if (observer) observer.disconnect();
-
     observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -363,7 +450,6 @@
       },
       { threshold: 0.08, rootMargin: "0px 0px 80px" }
     );
-
     document.querySelectorAll(".card").forEach((card) => observer.observe(card));
   }
 
@@ -376,7 +462,6 @@
     } else {
       els.viewer.setAttribute("open", "");
     }
-
     document.body.style.overflow = "hidden";
   }
 
@@ -384,22 +469,20 @@
     els.viewerVideo.pause();
     els.viewerVideo.removeAttribute("src");
     els.viewerImage.removeAttribute("src");
+    els.viewerFrame.removeAttribute("src");
 
     if (typeof els.viewer.close === "function") {
       els.viewer.close();
     } else {
       els.viewer.removeAttribute("open");
     }
-
     document.body.style.overflow = "";
   }
 
   function moveViewer(direction) {
     if (!filteredItems.length) return;
-
     activeIndex =
       (activeIndex + direction + filteredItems.length) % filteredItems.length;
-
     updateViewer();
   }
 
@@ -410,30 +493,33 @@
     els.viewerVideo.pause();
     els.viewerImage.hidden = true;
     els.viewerVideo.hidden = true;
+    els.viewerFrame.hidden = true;
+    els.viewerVideo.removeAttribute("src");
+    els.viewerImage.removeAttribute("src");
+    els.viewerFrame.removeAttribute("src");
+
     els.loveButton.classList.remove("loved");
     els.loveButton.innerHTML = "<span>♡</span> Me encanta";
 
-    const src = safePath(item.path);
-
     if (item.type === "image") {
-      els.viewerImage.src = src;
+      els.viewerImage.src = item.imageUrl || getCardImage(item);
       els.viewerImage.alt = item.name;
       els.viewerImage.hidden = false;
-      els.viewerVideo.removeAttribute("src");
+    } else if (item.previewUrl) {
+      els.viewerFrame.src = `${item.previewUrl}?autoplay=1`;
+      els.viewerFrame.hidden = false;
     } else {
-      els.viewerVideo.src = src;
+      els.viewerVideo.src = safePath(item.path || "");
       els.viewerVideo.hidden = false;
-      els.viewerImage.removeAttribute("src");
     }
 
     els.viewerTitle.textContent = item.name;
     els.viewerPosition.textContent = `${activeIndex + 1} de ${filteredItems.length}`;
   }
 
-  function loveCurrentItem(event) {
+  function loveCurrentItem() {
     els.loveButton.classList.toggle("loved");
     const loved = els.loveButton.classList.contains("loved");
-
     els.loveButton.innerHTML = loved
       ? "<span>♥</span> Guardado en el corazón"
       : "<span>♡</span> Me encanta";
@@ -444,10 +530,8 @@
 
   function startMessageRotation() {
     els.rotatingMessage.textContent = messages[0];
-
     window.setInterval(() => {
       els.rotatingMessage.classList.add("changing");
-
       window.setTimeout(() => {
         messageIndex = (messageIndex + 1) % messages.length;
         els.rotatingMessage.textContent = messages[messageIndex];
@@ -470,12 +554,8 @@
       const progress = Math.min(1, (now - start) / duration);
       const eased = 1 - Math.pow(1 - progress, 3);
       els.totalCount.textContent = Math.floor(target * eased);
-
-      if (progress < 1) {
-        requestAnimationFrame(tick);
-      } else {
-        els.totalCount.textContent = target;
-      }
+      if (progress < 1) requestAnimationFrame(tick);
+      else els.totalCount.textContent = target;
     }
 
     requestAnimationFrame(tick);
@@ -483,8 +563,7 @@
 
   function startAmbientHearts() {
     window.setInterval(() => {
-      if (document.hidden) return;
-      createFloatingHeart(els.floatingEffects);
+      if (!document.hidden) createFloatingHeart(els.floatingEffects);
     }, 1300);
   }
 
@@ -496,7 +575,6 @@
     heart.style.fontSize = `${11 + Math.random() * 17}px`;
     heart.style.setProperty("--drift", `${-100 + Math.random() * 200}px`);
     heart.style.animationDuration = `${8 + Math.random() * 5}s`;
-
     container.appendChild(heart);
     window.setTimeout(() => heart.remove(), 14000);
   }
@@ -505,7 +583,6 @@
     for (let i = 0; i < amount; i += 1) {
       window.setTimeout(() => createFloatingHeart(els.floatingEffects), i * 55);
     }
-
     showSurprise("Que nunca nos falten razones para volver a sonreír juntos.");
   }
 
@@ -517,14 +594,11 @@
       heart.style.left = `${x}px`;
       heart.style.top = `${y}px`;
       heart.style.fontSize = `${12 + Math.random() * 16}px`;
-
       const angle = (Math.PI * 2 * i) / amount;
       const distance = 55 + Math.random() * 95;
-
       heart.style.setProperty("--x", `${Math.cos(angle) * distance}px`);
       heart.style.setProperty("--y", `${Math.sin(angle) * distance}px`);
       heart.style.setProperty("--r", `${-60 + Math.random() * 120}deg`);
-
       document.body.appendChild(heart);
       window.setTimeout(() => heart.remove(), 1400);
     }
@@ -533,109 +607,64 @@
   function showRandomSurprise() {
     const message = messages[Math.floor(Math.random() * messages.length)];
     showSurprise(message);
-
-    const x = window.innerWidth * (0.35 + Math.random() * 0.3);
-    const y = window.innerHeight * (0.35 + Math.random() * 0.25);
-    createBurst(x, y, 18);
+    createBurst(
+      window.innerWidth * (0.35 + Math.random() * 0.3),
+      window.innerHeight * (0.35 + Math.random() * 0.25),
+      18
+    );
   }
 
   function showSurprise(message) {
     els.surpriseText.textContent = message;
     els.surpriseMessage.classList.add("show");
-
     if (surpriseTimer) window.clearTimeout(surpriseTimer);
-
     surpriseTimer = window.setTimeout(() => {
       els.surpriseMessage.classList.remove("show");
     }, 4200);
   }
 
-  function startMusic() {
-    const videoId = String(config.youtubeVideoId || "").trim();
+  async function startMusic() {
+    const file = String(config.musicFile || "").trim();
+    if (!file || audioLoadFailed) return;
 
-    if (!videoId) {
-      showSurprise("Todavía no se configuró una canción.");
-      return;
+    if (!musicStarted) {
+      els.backgroundMusic.src = safePath(file);
+      els.backgroundMusic.volume = Math.min(
+        1,
+        Math.max(0, Number(config.musicVolume) || 0.55)
+      );
+      els.backgroundMusic.addEventListener("error", () => {
+        audioLoadFailed = true;
+        musicPlaying = false;
+        updateMusicButton();
+      }, { once: true });
+      musicStarted = true;
     }
 
-    if (musicStarted) {
-      playMusic();
-      return;
+    try {
+      await els.backgroundMusic.play();
+      musicPlaying = true;
+      updateMusicButton();
+    } catch (error) {
+      musicPlaying = false;
+      updateMusicButton();
     }
-
-    youtubeFrame = document.createElement("iframe");
-    youtubeFrame.id = "youtubeMusicFrame";
-    youtubeFrame.title = config.musicTitle || "Nuestra canción";
-    youtubeFrame.src =
-      `https://www.youtube.com/embed/${encodeURIComponent(videoId)}` +
-      `?autoplay=1&loop=1&playlist=${encodeURIComponent(videoId)}` +
-      `&controls=1&enablejsapi=1&playsinline=1&rel=0`;
-    youtubeFrame.allow =
-      "autoplay; encrypted-media; picture-in-picture";
-    youtubeFrame.allowFullscreen = true;
-    youtubeFrame.referrerPolicy = "strict-origin-when-cross-origin";
-
-    els.youtubeMusicMount.replaceChildren(youtubeFrame);
-    els.musicDock.hidden = false;
-
-    musicStarted = true;
-    musicPlaying = true;
-    updateMusicButtons();
-
-    window.setTimeout(() => {
-      sendYouTubeCommand("setVolume", [Number(config.musicVolume) || 55]);
-      sendYouTubeCommand("playVideo");
-    }, 850);
   }
 
   function toggleMusic() {
-    if (!musicStarted) {
-      startMusic();
-      return;
-    }
-
-    if (musicPlaying) {
-      pauseMusic();
-    } else {
-      playMusic();
+    if (!musicStarted || els.backgroundMusic.paused) startMusic();
+    else {
+      els.backgroundMusic.pause();
+      musicPlaying = false;
+      updateMusicButton();
     }
   }
 
-  function playMusic() {
-    if (!musicStarted) {
-      startMusic();
-      return;
-    }
-
-    sendYouTubeCommand("playVideo");
-    musicPlaying = true;
-    updateMusicButtons();
-  }
-
-  function pauseMusic() {
-    sendYouTubeCommand("pauseVideo");
-    musicPlaying = false;
-    updateMusicButtons();
-  }
-
-  function sendYouTubeCommand(command, args = []) {
-    if (!youtubeFrame || !youtubeFrame.contentWindow) return;
-
-    youtubeFrame.contentWindow.postMessage(
-      JSON.stringify({
-        event: "command",
-        func: command,
-        args
-      }),
-      "*"
-    );
-  }
-
-  function updateMusicButtons() {
+  function updateMusicButton() {
     els.musicButton.classList.toggle("playing", musicPlaying);
-    els.musicLabel.textContent = musicPlaying ? "Pausar canción" : "Nuestra canción";
-    els.dockMusicButton.textContent = musicPlaying ? "❚❚" : "▶";
-    els.musicDock.classList.toggle("paused", !musicPlaying);
+    if (els.musicLabel) {
+      els.musicLabel.textContent = musicPlaying ? "Pausar canción" : "Nuestra canción";
+    }
   }
 
   async function sharePage() {
@@ -646,9 +675,8 @@
     };
 
     try {
-      if (navigator.share) {
-        await navigator.share(shareData);
-      } else if (navigator.clipboard && window.isSecureContext) {
+      if (navigator.share) await navigator.share(shareData);
+      else if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(window.location.href);
         showSurprise("El enlace quedó copiado. Ya puedes compartirlo ♥");
       } else {
@@ -668,7 +696,9 @@
   }
 
   function safePath(path) {
-    return String(path)
+    const value = String(path || "");
+    if (/^https?:\/\//i.test(value)) return value;
+    return value
       .split("/")
       .map((part) => encodeURIComponent(part))
       .join("/");

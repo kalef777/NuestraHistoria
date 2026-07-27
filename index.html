@@ -159,8 +159,7 @@
         <div class="empty-heart">♡</div>
         <h3>Aquí aparecerán sus recuerdos</h3>
         <p>
-          Copia las fotos y videos dentro de la carpeta <strong>media</strong>
-          y después ejecuta <strong>generar-lista.bat</strong>.
+          La galería no pudo cargar los recuerdos desde Google Drive.
         </p>
       </div>
 
@@ -206,6 +205,7 @@
       <div class="viewer-media">
         <img id="viewerImage" alt="" hidden>
         <video id="viewerVideo" controls playsinline hidden></video>
+        <iframe id="viewerFrame" title="Video de Google Drive" allow="autoplay; fullscreen" allowfullscreen hidden></iframe>
       </div>
 
       <div class="viewer-caption">
@@ -224,26 +224,7 @@
     <button id="nextItem" class="viewer-nav viewer-next" type="button" aria-label="Siguiente">›</button>
   </dialog>
 
-  <aside class="music-dock" id="musicDock" hidden>
-    <div class="music-dock-header">
-      <div class="music-now-playing">
-        <span class="equalizer" aria-hidden="true">
-          <i></i><i></i><i></i>
-        </span>
-
-        <div>
-          <strong id="musicTitle">Nuestra canción</strong>
-          <span>Sonando para nosotros ♥</span>
-        </div>
-      </div>
-
-      <button id="dockMusicButton" class="dock-music-button" type="button" aria-label="Pausar o reproducir">
-        ❚❚
-      </button>
-    </div>
-
-    <div class="youtube-player" id="youtubeMusicMount"></div>
-  </aside>
+  <audio id="backgroundMusic" preload="auto" loop></audio>
 
   <div class="surprise-message" id="surpriseMessage" role="status" aria-live="polite">
     <span>♥</span>

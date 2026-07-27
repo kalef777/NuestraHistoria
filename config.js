@@ -29,10 +29,20 @@ window.ALBUM_CONFIG = {
     "Entre tantas casualidades, qué bonito habernos encontrado."
   ],
 
-  // Canción de YouTube que comenzará cuando se pulse “Abrir nuestro álbum”.
-  youtubeVideoId: "FlfHCsIiRKo",
+  /*
+    IMPORTANTE:
+    Pega aquí una CLAVE NUEVA. No uses la clave que compartiste en el chat.
+    La clave debe estar restringida a:
+    https://kalef777.github.io/NuestraHistoria/*
+    y solamente a Google Drive API.
+  */
+  driveFolderId: "1TSF2BWjiojkOijiy__rZjqwK1yTdi1U7",
+  googleDriveApiKey: "AIzaSyC5P6ClurpI2dVgor-TwKYshdUywB-Io7w",
+
+  // Música opcional. Sube media/cancion.mp3 si deseas usarla.
+  musicFile: "media/cancion.mp3",
   musicTitle: "Nuestra canción",
-  musicVolume: 55,
+  musicVolume: 0.55,
 
   itemsPerPage: 60,
   introEnabled: true,
